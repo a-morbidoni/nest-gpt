@@ -1,7 +1,30 @@
-import { Body, Controller, Get, HttpStatus, Param, Post, Res } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  FileTypeValidator,
+  Get,
+  HttpStatus,
+  MaxFileSizeValidator,
+  Param,
+  ParseFilePipe,
+  Post,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
 import type { Response } from 'express';
-import { OrthographyDto, ProsConsDiscusserDto, TextToAudioDto, TranslateDto } from './dtos';
+import {
+  AudioToTextDto,
+  OrthographyDto,
+  ProsConsDiscusserDto,
+  TextToAudioDto,
+  TranslateDto,
+} from './dtos';
 import { GptService } from './gpt.service';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { uid } from 'uid';
 
 @Controller('gpt')
 export class GptController {
@@ -43,7 +66,10 @@ export class GptController {
   }
 
   @Post('text-to-audio')
-  async textToAudio(@Body() textToAudioDto: TextToAudioDto, @Res() res: Response) {
+  async textToAudio(
+    @Body() textToAudioDto: TextToAudioDto,
+    @Res() res: Response,
+  ) {
     const filePath = await this.gptService.textToAudio(textToAudioDto);
     res.setHeader('Content-Type', 'audio/mp3');
     res.status(HttpStatus.OK);
@@ -57,5 +83,55 @@ export class GptController {
     res.setHeader('Content-Type', 'audio/mp3');
     res.status(HttpStatus.OK);
     res.sendFile(filePath);
+  }
+
+  @Post('audio-to-text')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: diskStorage({
+        destination: './uploads',
+        filename: (req, file, callback) => {
+          const fileExtension = file.originalname.split('.').pop();
+          const fileName = `${uid()}.${fileExtension}`;
+          return callback(null, fileName);
+        },
+      }),
+    }),
+  )
+  async audioToText(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({
+            maxSize: 5 * 1000 * 1024,
+            message: 'File too large',
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+    @Body() audioToTextDto: AudioToTextDto,
+  ) {
+    if (!file) {
+      throw new BadRequestException('File is required.');
+    }
+
+    const allowedMimeTypes = [
+      'audio/mpeg',
+      'audio/wav',
+      'audio/x-wav',
+      'audio/webm',
+      'audio/mp4',
+      'audio/m4a',
+      'audio/x-m4a',
+      'audio/ogg',
+    ];
+
+    if (!allowedMimeTypes.includes(file.mimetype)) {
+      throw new BadRequestException(
+        `Validation failed: Invalid file type. Received ${file.mimetype}. Expected one of: ${allowedMimeTypes.join(', ')}`,
+      );
+    }
+    return this.gptService.audioToText(file, audioToTextDto);
   }
 }
